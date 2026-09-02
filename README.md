@@ -34,6 +34,8 @@ git config core.hooksPath .githooks
 也可命令行：`gh secret set LLM_API_KEY`（引导输入，不回显）。
 
 ### 4. 配 main 分支保护（Settings → Branches，或 API）
+> 前提：仓库需为 **public** 或账号为 GitHub Pro——free 账号的 private 仓库不支持分支保护（API 返回 403，实证教训）。
+
 ```bash
 # 用 API 配置（等价于网页勾选：Require PR + 4 required checks）
 gh api -X PUT repos/{owner}/{repo}/branches/main/protection \
