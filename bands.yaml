@@ -1,0 +1,31 @@
+# 越界闭环层级（bands.yaml）
+# 谁写：工程负责人联合变更管理 / 合规，版本化配置。
+# 放哪：仓库内，进版本控制。
+# 怎么触发：触发器层唤起（CI 定时 workflow / 监控栈 webhook / 内网 Cron）；只有越界才唤起 AI。
+# 原则：检测保持确定性（不用 AI 判断"有没有越界"）；层级决定 AI 能做什么（1σ 日志 / 2σ 只读诊断 / 3σ 可行动）。
+#
+# 使用说明（模板态，按项目落地）：
+#   1) metric: 填真实指标名（如 ci_test_failure_rate / deploy_success_rate），并同步维护
+#      metrics/ 下同名 JSON（values 数组 = 历史值序列）
+#   2) 阈值实现在 scripts/detect_drift.py（Western Electric 1/2/3σ + 单调漂移，硬编码、有单测）；
+#      bands.yaml 声明层级与动作，二者由 .github/workflows/maintenance-scan.yml 的 job 结构绑定
+#   3) 数据采集端按项目接入：参考上游项目 SDLCDemo 的模式——workflow 每日采集真实值
+#      追加写入 metrics JSON（写回须走独立数据分支，main 受分支保护不可直推，见 README 落地清单）
+
+metric: <指标名，例如 ci_test_failure_rate>
+baseline: rolling_30d          # 基线窗口说明（与采集窗口匹配）
+rules: western_electric        # 判异规则：1/2/3σ + 单调漂移（实现在 scripts/detect_drift.py）
+
+tiers:
+  1sigma:
+    action: log                # 只记录，不动作
+  2sigma:
+    action: diagnose           # 只读诊断，给结论
+    tools: "Read,Grep,Bash(gh run view *)"
+  3sigma:
+    action: propose            # 可行动，但只开 PR 走审查门，不直接改生产
+    routes:
+      - pull_request
+      # - runbook: rollback-deploy   # 按项目补：回滚手册链接等
+
+# 填写完成（指标名真实化、采集端接入）后可删除本提示段

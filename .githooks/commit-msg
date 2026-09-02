@@ -1,0 +1,38 @@
+#!/bin/bash
+# commit-msg —— 本地强制：commit message 必须引用 Issue（#数字）。
+#
+# 需求链路约定：Issue = 原始需求 → intent.md（MRD）→ spec.md（PRD）→ plan.md → 代码。
+# 代码提交必须能回溯到 Issue（GitHub 会自动把 commit 挂到 Issue 时间线）。
+#
+# 云端兜底：.github/workflows/ci.yml 会在 push / PR 时再查一遍 ——
+# 本地被 --no-verify 跳过时，云端照样拦。
+#
+# 启用：git config core.hooksPath .githooks
+
+set -e
+
+MSG_FILE="$1"
+MESSAGE=$(<"$MSG_FILE")
+
+# merge commit 由 git 自动生成（"Merge branch ..."），只做整合，放行
+case "$MESSAGE" in
+  Merge[[:space:]]*)
+    echo "[commit-msg] merge commit，跳过检查"
+    exit 0
+    ;;
+esac
+
+# 用 case 通配检查 Issue 引用（# 后至少一位数字）。
+# 不用 [[ =~ ]]:bash 会把 =~ 模式里的 # 当注释起始，`#[0-9]+` 直接解析报错。
+case "$MESSAGE" in
+  *'#'[0-9]*)
+    echo "[commit-msg] 通过（已引用 Issue）"
+    exit 0
+    ;;
+esac
+
+echo "" >&2
+echo "[commit-msg] commit message 必须引用 Issue（形如：fix: 支持标签 (#123)）。" >&2
+echo "            需求链路：Issue（原始需求）→ intent.md（MRD）→ spec.md（PRD）→ plan.md → 代码" >&2
+echo "            如确无关联 Issue，请先开一个 Issue 登记需求。" >&2
+exit 1

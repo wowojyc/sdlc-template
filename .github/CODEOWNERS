@@ -1,0 +1,10 @@
+# 默认所有人都是 code owner：任何改动都需要你审核
+# 配合分支保护使用 —— AI 只提发现项，批准永远由人来做
+*       @wowojyc
+
+# 流程与护栏文件：改动影响全队，需要 owner 亲自过目
+/AGENTS.md              @wowojyc
+/REVIEW.md              @wowojyc
+/bands.yaml             @wowojyc
+/.qoder/                @wowojyc
+/.github/workflows/     @wowojyc

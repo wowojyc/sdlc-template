@@ -1,0 +1,44 @@
+name: release
+
+# 发布：push vX.Y.Z tag → 门禁 → 生成 GitHub Release。
+# 版本号语义化（vMAJOR.MINOR.PATCH）；Release notes 从 PR 自动汇总，不维护 CHANGELOG 文件。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: 发布前门禁：测试 + lint 必须全绿
+        run: |
+          pip install -r requirements-dev.txt
+          make test
+          make lint
+
+      - name: 校验 tag 格式（v数字.数字.数字）
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag 必须是 vX.Y.Z 语义化版本，当前：$TAG"
+            exit 1
+          fi
+          echo "发布版本：$TAG"
+
+      - name: 创建 GitHub Release（notes 从 PR 自动汇总）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF#refs/tags/}" --generate-notes --verify-tag

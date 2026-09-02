@@ -1,0 +1,107 @@
+name: ci
+
+# 最基础的 CI：每次 push / PR 都跑测试和 lint
+# 这是整套自动化的地基 —— 没有它，后面所有门禁都没有意义
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # 需求链路兜底：本地 commit-msg 被 --no-verify 跳过时，云端仍强制
+  # 每个 commit 必须引用 Issue（#数字）—— 保证代码可回溯到原始需求
+  check-commit-refs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史来比较 before / base.sha
+
+      - name: 检查 commit 是否引用 Issue
+        # dependabot 的 commit 由 GitHub bot 自动生成，无法引用 Issue，双机制豁免：
+        # 1) PR 场景：整步跳过（if 条件，bot PR 的 head 全为 bot commit，无需检查）；
+        # 2) push 场景：按作者过滤（dependabot PR 合并进 main 触发 push 事件时，
+        #    if 条件字段为空恒真，但 bot commit 会被下面的作者过滤排除，不误报）。
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # PR 场景：用运行时 base 分支最新 tip。
+            # 不能用创建时的 base.sha——PR 存活期间 base 分支可能合入了新 PR（如 merge commit
+            # 带进无 Issue 引用的 commit），base.sha 会把它们误算进检查范围导致误报。
+            git fetch origin "${{ github.event.pull_request.base.ref }}" --quiet
+            BASE="origin/${{ github.event.pull_request.base.ref }}"
+          else
+            BASE="${{ github.event.before }}"
+            # 基线不存在（如首次推送）时跳过并提示，不误伤历史 commit
+            if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+              echo "::warning::基线 commit 不存在（首次推送？），跳过本次检查"
+              exit 0
+            fi
+          fi
+          # 输出带作者列（%an），先排除 dependabot[bot] 的 commit，再查无 #Issue 的；
+          # 真人提交不受影响，仍强制引用 Issue。
+          bad=$(git log --no-merges --format='%h %an %s' "${BASE}..HEAD" \
+            | grep -v 'dependabot\[bot\]' \
+            | grep -Ev '#[0-9]+' || true)
+          if [ -n "$bad" ]; then
+            echo "以下 commit 未关联 Issue（message 缺 #数字）："
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ ${BASE}..HEAD 全部非 merge commit 均引用 Issue"
+
+  # 需求链路状态投影：每次 push / PR 推导产物链进度，输出到 Step Summary
+  # 确定性检查（scripts/audit_artifacts.py），不用 AI 判断；断链（下游存在而上游缺失）即失败
+  flow-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 推导链路状态
+        run: |
+          python scripts/audit_artifacts.py --format markdown >> "$GITHUB_STEP_SUMMARY"
+          python scripts/audit_artifacts.py  # 断链时退出码非 0，workflow 失败
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Test
+        run: make test
+
+      - name: Lint
+        run: make lint
+
+      - name: 覆盖率摘要
+        run: |
+          python - <<'PYEOF' >> "$GITHUB_STEP_SUMMARY"
+          import xml.etree.ElementTree as ET
+          root = ET.parse('coverage.xml').getroot()
+          print(f"## 测试覆盖率：{float(root.get('line-rate')) * 100:.0f}%")
+          print()
+          print("| 文件 | 覆盖率 |")
+          print("|---|---|")
+          for cls in root.iter('class'):
+              print(f"| {cls.get('filename')} | {float(cls.get('line-rate')) * 100:.0f}% |")
+          PYEOF
+
+      - name: 上传覆盖率报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml

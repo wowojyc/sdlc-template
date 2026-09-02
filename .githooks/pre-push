@@ -1,0 +1,105 @@
+#!/bin/bash
+# pre-push —— push 之前，用【本地 Qoder】按 REVIEW.md 审一遍
+#
+# 为什么用本地：
+#   · 不用在 GitHub 配任何 token（认证用你本地已登录的 Qoder）
+#   · 快，不用等 GitHub 排队
+#   · 断网也能审（只要你本地模型通道可用）
+#
+# 取舍：只在你本地 push 时触发。
+#       别人在网页上给你开 PR 时不会触发 —— 那种情况才需要云端 workflow（可选）。
+#
+# 启用：git config core.hooksPath .githooks
+# 临时跳过：git push --no-verify
+
+set -e
+
+BASE="${SDLC_REVIEW_BASE:-main}"
+
+if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+  echo "[pre-push] 找不到基线分支 $BASE，跳过审查"
+  exit 0
+fi
+
+diff_content=$(git diff "$BASE"...HEAD)
+if [ -z "$diff_content" ]; then
+  echo "[pre-push] 没有改动，跳过审查"
+  exit 0
+fi
+
+# 定位 Qoder CLI（中国版 qoderclicn 优先，国际版 qodercli 兜底）并直接用 node 执行。
+# 不用 sh 包装脚本：Windows npm 全局安装的包装脚本依赖 sed/dirname/uname，
+# 在裁剪过的 git-bash 环境里跑不起来（会让本地审查静默失效）。
+QODERCLI_JS=""
+for cli in qoderclicn qodercli; do
+  CLI_BIN=$(command -v "$cli" 2>/dev/null || true)
+  [ -z "$CLI_BIN" ] && continue
+  # 每个 CLI 只找自己 npm 包里的 bundle，找不到就换下一个 CLI
+  case "$cli" in
+    qoderclicn) CLI_JS_MSYS="${CLI_BIN%/*}/node_modules/@qodercn-ai/qoderclicn/bundle/qoderclicn.js" ;;
+    qodercli)   CLI_JS_MSYS="${CLI_BIN%/*}/node_modules/@qoder-ai/qodercli/bundle/qodercli.js" ;;
+  esac
+  if [ -f "$CLI_JS_MSYS" ]; then
+    QODERCLI_JS="$CLI_JS_MSYS"
+    break
+  fi
+done
+if [ -z "$QODERCLI_JS" ]; then
+  echo "[pre-push] 未检测到 qodercli/qoderclicn，跳过 AI 审查（装好后自动生效）"
+  exit 0
+fi
+# 审查标准缺失时优雅降级，但明确提示（避免无审查静默通过）
+if ! [ -f .github/prompts/review.md ]; then
+  echo "[pre-push][warning] 缺少 .github/prompts/review.md，本次跳过 AI 审查（建议恢复该文件）"
+  exit 0
+fi
+# MSYS 路径（/c/xxx）转 Windows 风格（c:/xxx），node 才能解析。
+# 前置假设：command -v 在 git-bash 中总返回绝对路径（实测如此）
+case "$QODERCLI_JS" in
+  /[a-zA-Z]/*) QODERCLI_JS="${QODERCLI_JS:1:1}:${QODERCLI_JS:2}" ;;
+esac
+
+echo "[pre-push] 正在用本地 Qoder 按 REVIEW.md 审查改动..."
+
+# 临时文件放 .git 下（仓库隔离、覆盖写、无需清理；/tmp 全局共享且有符号链接风险）
+PROMPT_FILE="$(git rev-parse --git-dir)/sdlc-review-prompt.txt"
+
+{
+  printf '%s\n' "$(<.github/prompts/review.md)"
+  printf '\n--- 以下是本次要推送的 diff ---\n'
+  # diff 单独作为 %s 参数输出（不拼进格式串），diff 里的 % 字符原样保留
+  printf '%s\n' "$diff_content"
+} > "$PROMPT_FILE"
+
+# prompt 走 stdin 而不是 -p 参数：Windows CreateProcessW 命令行上限 32767 字符，
+# 大 diff 塞进参数会超限导致 node 启动失败、审查静默失效
+result=$(node "$QODERCLI_JS" -p \
+  --allowed-tools 'Read,Grep,Glob' --max-turns 6 \
+  < "$PROMPT_FILE" 2>/dev/null || true)
+
+echo "$result"
+
+# 只有 Important 级问题才阻断；Nit 仅提示，不拦人
+# 不能靠字符串匹配：AI 按 REVIEW.md 模板总是输出 "## Important" 标题（即使无发现）。
+# 用 python 提取 Important 段落，语义判断是否真有发现项。
+if printf '%s' "$result" | PYTHONUTF8=1 python -c '
+import re, sys
+text = sys.stdin.read()
+m = re.search(r"##\s*Important[^\n]*\n(.*?)(?=\n##\s|\Z)", text, re.S)
+body = (m.group(1) or "").strip() if m else ""
+# 发现项按 REVIEW.md 模板带方括号标签（- [Bugs] / - **[Security]** 等）；
+# “无。”或“- 无”等占位不算发现项（纯 ASCII 判断，无编码依赖）
+if re.search(r"^\s*-\s+(\*\*)?\[[A-Za-z]+\]", body, re.M):
+    sys.exit(1)
+sys.exit(0)
+' >/dev/null 2>&1; then
+  : # 无 Important，放行
+else
+  echo ""
+  echo "[pre-push] 发现 Important 级问题，已中止 push。"
+  echo "          修复后重新 push；确需跳过：git push --no-verify"
+  exit 1
+fi
+
+echo "[pre-push] 审查通过"
+exit 0

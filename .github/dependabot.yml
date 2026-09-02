@@ -1,0 +1,14 @@
+# dependabot 自动依赖更新配置。
+# 升级以 PR 形式提出（bot 身份），走与人工 PR 相同的门禁：分支保护 + CI + 人 approve，不自动合并。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    labels:
+      - "依赖"

@@ -1,0 +1,37 @@
+#!/bin/bash
+# git 层兜底：Qoder Hooks 在"编辑那一刻"拦，这里在"提交那一刻"再兜一道。
+# 两者互补 —— Hooks 更早，git 能兜住所有来源的改动（包括人手动改的）。
+#
+# 启用：git config core.hooksPath .githooks
+
+set -e
+
+echo "[pre-commit] 跑测试..."
+# Windows 上可能没有 make：有则走 make（含 sdlc-test-run 标记），没有则退化直跑 pytest
+if command -v make >/dev/null 2>&1; then
+  if ! make test >/dev/null 2>&1; then
+    echo "测试未通过，拒绝提交。请先修复。" >&2
+    exit 1
+  fi
+else
+  if ! python -m pytest -q >/dev/null 2>&1; then
+    echo "测试未通过，拒绝提交。请先修复。" >&2
+    exit 1
+  fi
+  mkdir -p .git && touch .git/sdlc-test-run
+fi
+
+# 拦住"顺手改测试"：同时改了 src/ 和 tests/ 就要求拆开提交
+changed=$(git diff --cached --name-only)
+changed_src=$(echo "$changed" | grep -c '^src/' || true)
+changed_test=$(echo "$changed" | grep -cE '^tests/|test_.*\.py$' || true)
+
+if [ "$changed_src" -gt 0 ] && [ "$changed_test" -gt 0 ]; then
+  echo "" >&2
+  echo "检测到本次同时改动了 src/ 与 tests/。" >&2
+  echo "请拆成两次提交：先提实现，再单独提测试（并在 PR 里说明改测试的理由）。" >&2
+  exit 1
+fi
+
+echo "[pre-commit] 通过"
+exit 0

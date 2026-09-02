@@ -1,0 +1,6 @@
+{
+  "_说明": "示例历史值（模板态）。实际使用时由采集端定期追加写入（勿手改），maintenance-scan 只做读取与计算。指标名与 bands.yaml 的 metric 保持一致。",
+  "metric": "ci_test_failure_rate",
+  "unit": "ratio",
+  "values": [0.03, 0.0, 0.03, 0.05, 0.02, 0.04, 0.03, 0.0, 0.02, 0.05]
+}

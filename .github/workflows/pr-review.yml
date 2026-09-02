@@ -1,0 +1,114 @@
+name: pr-review
+
+# 05 部署 · AI 进入 PR 审查循环
+#
+# 两种模式，可任选或并存：
+#   1) 本地审查（零配置，推荐先试）：.githooks/pre-push —— push 前用本地 Qoder 审
+#   2) 云端审查（本文件）：任何人在网页开 PR 都会自动审，需配 Secret
+#
+# 容错设计：没配 LLM_API_KEY 时整段跳过，不报红叉。
+# 想启用：Settings → Secrets and variables → Actions → 新建
+#         LLM_API_KEY（硅基流动：https://cloud.siliconflow.com 获取）
+#         可选：LLM_BASE_URL / LLM_MODEL 仓库变量，默认硅基流动 + DeepSeek-V3
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      # if 里不能直接用 secrets，先转成一个普通变量
+      HAS_LLM_KEY: ${{ secrets.LLM_API_KEY != '' }}
+      LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.siliconflow.cn/v1' }}
+      LLM_MODEL: ${{ vars.LLM_MODEL || 'deepseek-ai/DeepSeek-V3' }}
+
+    steps:
+      - name: 检查是否已配置 LLM key
+        run: |
+          if [ "$HAS_LLM_KEY" != "true" ]; then
+            {
+              echo "## 已跳过云端 AI 审查"
+              echo ""
+              echo "未配置 \`LLM_API_KEY\`，本工作流跳过（不是失败）。"
+              echo ""
+              echo "**本地审查不受影响**，启用方式："
+              echo '```'
+              echo "git config core.hooksPath .githooks"
+              echo '```'
+              echo ""
+              echo "如需云端审查，去 Settings → Secrets and variables → Actions 添加该 Secret（硅基流动 key）。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "跳过：未配置 LLM key"
+          fi
+
+      - uses: actions/checkout@v4
+        if: env.HAS_LLM_KEY == 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Prepare diff
+        if: env.HAS_LLM_KEY == 'true'
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+          echo "bytes=$(wc -c < pr.diff)" >> "$GITHUB_OUTPUT"
+
+      - name: Guard against oversized diff
+        if: env.HAS_LLM_KEY == 'true' && steps.diff.outputs.bytes > 200000
+        run: |
+          echo "diff 过大（${{ steps.diff.outputs.bytes }} 字节），跳过自动审查，请人工评审。" \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Run AI review
+        if: env.HAS_LLM_KEY == 'true' && steps.diff.outputs.bytes <= 200000
+        id: review
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          # 提示词引用仓库里的 REVIEW.md —— 标准变更只需改那一处
+          {
+            cat .github/prompts/review.md
+            echo ""
+            echo "--- 以下是本次 PR 的 diff ---"
+            cat pr.diff
+          } > /tmp/review-prompt.txt
+
+          # 调远端 LLM（默认硅基流动，OpenAI 兼容协议）
+          jq -n --arg model "$LLM_MODEL" --rawfile content /tmp/review-prompt.txt \
+            '{model: $model, messages: [{role: "user", content: $content}], max_tokens: 2048}' |
+            curl -sS --max-time 300 -X POST "$LLM_BASE_URL/chat/completions" \
+              -H "Authorization: Bearer $LLM_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d @- > review-raw.json
+
+          # 取出文本结果（OpenAI 兼容格式；出错时给可读信息）
+          jq -r '.choices[0].message.content // .error.message // tostring' review-raw.json > review.md
+          echo "已生成审查结果（$(wc -l < review.md) 行）"
+
+      - name: Post findings as PR comment
+        if: env.HAS_LLM_KEY == 'true' && steps.review.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## AI 审查（按 REVIEW.md）"
+            echo ""
+            echo "> 发现项仅供参考，**不阻塞也不批准合并** —— 由 code owner 通过分支保护定夺。"
+            echo ""
+            cat review.md
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+
+      - name: Upload result
+        if: env.HAS_LLM_KEY == 'true' && steps.review.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-review-${{ github.event.pull_request.number }}
+          path: review.md

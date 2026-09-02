@@ -1,0 +1,41 @@
+name: 需求登记
+description: Gate 1 —— 动手前登记原始需求，AI 将据此产出 intent/spec/plan
+title: "需求：一句话说明"
+labels: ["需求"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        登记后流程：AI 读本 Issue → 写 intent/<slug>.md（MRD 六字段，来源填本 Issue 号）
+        → 按需 spec/<slug>.md、plan/<slug>.md → 提交（commit 引用 #号）→ PR（Closes 本 Issue）。
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么做（背景 / 痛点）
+      description: 现在哪里不舒服、不做会怎样
+      placeholder: 例如：需求进度靠人肉对比文件判断，状态字段容易和代码事实脱节……
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 要什么（期望成果）
+      description: 交付后能做什么；尽量可验收
+      placeholder: 例如：产物链状态确定性推导，commit 强制关联 Issue……
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 怎么算成（验收标准）
+      description: 可勾选的验收项
+      value: |
+        - [ ] 待补充
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 约束 / 备注
+      description: 依赖、边界、明确不做什么
+      placeholder: 例如：零新增依赖；不改动生成目录……
