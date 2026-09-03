@@ -65,7 +65,7 @@ JSON
 
 | Gate | 做什么 | 产物 | 检查 |
 |---|---|---|---|
-| 1 需求登记 | 开 Issue（用 issue forms）→ 写 `intent/<slug>.md`（六字段 MRD：意图/作者/状态/来源/问题/预期成果） | Issue + intent/ | 人工批准 MRD |
+| 1 需求登记 | 开 Issue（用 issue forms）→ 写 `intent/<slug>.md`（七字段 MRD：意图/作者/状态/来源/类型/问题/预期成果） | Issue + intent/ | 人工批准 MRD |
 | 2 设计/计划 | 按需写 `spec/<slug>.md`（PRD）与 `plan/<slug>.md`（技术方案） | spec/ plan/ | 人工确认 |
 | 3 写码 + 自验 | 先建分支（`git branch feat/xxx origin/main` + `git switch`）→ TDD（测试先行）→ `make test` + `make lint` | src/ tests/ | pre-commit + pre-push |
 | 4 评审 | push 分支 → 开 PR（body 写 `Closes #xx`）→ 等 4 checks | PR | check-commit-refs / flow-audit / review / test |
